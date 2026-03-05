@@ -7,20 +7,23 @@
 import json
 import base64
 import os
+from pathlib import Path
+
 from crypto_engine import encrypt_data, decrypt_data
 
 HEADER_MAGIC = b"PKLOG001"
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
+# Project root (…/PassKeyLogger)
+BASE_DIR = Path(__file__).resolve().parent.parent
 
-USER_DATA_FOLDER = os.path.join(PROJECT_ROOT, "user_data")
-INPUT_FOLDER = os.path.join(USER_DATA_FOLDER, "input_files")
-OUTPUT_FOLDER = os.path.join(USER_DATA_FOLDER, "output_files")
+USER_DATA_DIR = BASE_DIR / "user_data"
+INPUT_DIR = USER_DATA_DIR / "input_files"
+OUTPUT_DIR = USER_DATA_DIR / "output_files"
 
 
 def _ensure_folders():
-    os.makedirs(INPUT_FOLDER, exist_ok=True)
-    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+    INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _b64e(b: bytes) -> str:
@@ -31,24 +34,58 @@ def _b64d(s: str) -> bytes:
     return base64.b64decode(s.encode("ascii"))
 
 
+def resolve_input_path(filename_or_path: str) -> Path:
+    """
+    Accept either a plain filename (e.g., 'test.txt') or a path
+    (e.g., 'user_data/input_files/test.txt' or 'H:\\...\\test.txt').
+
+    If a real path exists, use it.
+    Otherwise treat it as a filename inside INPUT_DIR.
+    """
+    p = Path(filename_or_path)
+
+    # If user gave a real path (absolute or relative) and it exists, use it
+    if p.exists():
+        return p
+
+    # Otherwise treat it as a filename inside input_files
+    candidate = INPUT_DIR / filename_or_path
+    return candidate
+
+
+def resolve_encrypted_path(filename_or_path: str) -> Path:
+    """
+    Same idea as resolve_input_path, but for encrypted files stored in OUTPUT_DIR.
+    Accepts either 'file.pklog' or a full/relative path.
+    """
+    p = Path(filename_or_path)
+
+    if p.exists():
+        return p
+
+    candidate = OUTPUT_DIR / filename_or_path
+    return candidate
+
+
 def encrypt_file(filename: str, passkey: bytes) -> None:
     """
-    Encrypt file from user_data/input_files
-    Save encrypted file as filename.pklog (no double extension)
+    Encrypt file from user_data/input_files (or from a provided path).
+    Save encrypted file as filename.pklog (no double extension).
     """
     _ensure_folders()
 
-    input_path = os.path.join(INPUT_FOLDER, filename)
+    input_path = resolve_input_path(filename)
 
-    if not os.path.exists(input_path):
-        raise Exception(f"File not found in user_data/input_files: {filename}")
+    if not input_path.exists():
+        raise Exception(f"File not found in user_data/input_files: {input_path}")
 
     with open(input_path, "rb") as f:
         data = f.read()
 
     salt, nonce, ciphertext = encrypt_data(passkey, data)
 
-    name, ext = os.path.splitext(filename)
+    # Use only the selected file name for output naming
+    name, ext = os.path.splitext(input_path.name)
 
     metadata = {
         "version": 1,
@@ -62,7 +99,7 @@ def encrypt_file(filename: str, passkey: bytes) -> None:
     meta_len = len(meta_bytes).to_bytes(4, "big")
 
     encrypted_filename = f"{name}.pklog"
-    output_path = os.path.join(OUTPUT_FOLDER, encrypted_filename)
+    output_path = OUTPUT_DIR / encrypted_filename
 
     with open(output_path, "wb") as out:
         out.write(HEADER_MAGIC)
@@ -75,15 +112,15 @@ def encrypt_file(filename: str, passkey: bytes) -> None:
 
 def decrypt_file(encrypted_filename: str, passkey: bytes, method: str) -> None:
     """
-    Decrypt file from user_data/output_files
-    Restore original extension automatically
+    Decrypt file from user_data/output_files (or from a provided path).
+    Restore original extension automatically.
     """
     _ensure_folders()
 
-    encrypted_path = os.path.join(OUTPUT_FOLDER, encrypted_filename)
+    encrypted_path = resolve_encrypted_path(encrypted_filename)
 
-    if not os.path.exists(encrypted_path):
-        raise Exception(f"Encrypted file not found in user_data/output_files: {encrypted_filename}")
+    if not encrypted_path.exists():
+        raise Exception(f"Encrypted file not found in user_data/output_files: {encrypted_path}")
 
     with open(encrypted_path, "rb") as f:
         blob = f.read()
@@ -113,7 +150,7 @@ def decrypt_file(encrypted_filename: str, passkey: bytes, method: str) -> None:
     else:
         raise Exception("Invalid decryption method.")
 
-    output_path = os.path.join(OUTPUT_FOLDER, output_name)
+    output_path = OUTPUT_DIR / output_name
 
     with open(output_path, "wb") as out:
         out.write(plaintext)
